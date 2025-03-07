@@ -25,10 +25,10 @@ class PatchMerge:
         self.config_path = config
         self.config_type = None
         self.output = results or self.get_default_results_folder()
-        self.target_patches = {
-            "OpenCore":"patches_OC.plist",
-            "Clover":"patches_Clover.plist"
-        }
+        self.target_patches = (
+            ("OpenCore","patches_OC.plist"),
+            ("Clover","patches_Clover.plist")
+        )
         # Expand paths as needed
         if self.config_path:
             self.config_path = os.path.realpath(self.config_path)
@@ -40,7 +40,7 @@ class PatchMerge:
         # Append patches_OC/Clover.plist to the path, and return a list
         # with the format ((oc_path,exists),(clover_path,exists))
         path_checks = []
-        for name in self.target_patches.values():
+        for p_type,name in self.target_patches:
             p = os.path.join(path,name) if path else None
             path_checks.append((
                 p,
@@ -143,11 +143,12 @@ class PatchMerge:
         return (False if all_zeroes else unprintables,ascii_string)
 
     def check_normalize(self, patch_or_drop, normalize_headers, check_type="Patch"):
+        sig = ("OemTableId","TableSignature")
         if normalize_headers:
             # OpenCore - and NormalizeHeaders is enabled.  Check if we have
             # any unprintable ASCII chars in our OemTableId or TableSignature
             # and warn.
-            if any(self.get_ascii_print(patch_or_drop.get(x,b"\x00"))[0] for x in ("OemTableId","TableSignature")):
+            if any(self.get_ascii_print(plist.extract_data(patch_or_drop.get(x,b"\x00")))[0] for x in sig):
                 print("\n{}!! WARNING !!{} NormalizeHeaders is {}ENABLED{}, and table ids contain unprintable".format(
                     self.yel,
                     self.rst,
@@ -159,7 +160,7 @@ class PatchMerge:
         else:
             # Not enabled - check for question marks as that may imply characters
             # were sanitized when creating the patches/dropping tables.
-            if any(b"\x3F" in patch_or_drop.get(x,b"\x00") for x in ("OemTableId","TableSignature")):
+            if any(b"\x3F" in plist.extract_data(patch_or_drop.get(x,b"\x00")) for x in sig):
                 print("\n{}!! WARNING !!{} NormalizeHeaders is {}DISABLED{}, and table ids contain '?'!".format(
                     self.yel,
                     self.rst,
