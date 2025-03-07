@@ -22,13 +22,13 @@ class PatchMerge:
             self.h = 30
         self.interactive = interactive
         self.overwrite = overwrite
-        self.config_path = config
-        self.config_type = None
-        self.output = results or self.get_default_results_folder()
         self.target_patches = (
             ("OpenCore","patches_OC.plist"),
             ("Clover","patches_Clover.plist")
         )
+        self.config_path = config
+        self.config_type = None
+        self.output = results or self.get_default_results_folder()
         # Expand paths as needed
         if self.config_path:
             self.config_path = os.path.realpath(self.config_path)
