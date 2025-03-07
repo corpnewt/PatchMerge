@@ -38,13 +38,19 @@ class PatchMerge:
 
     def _get_patches_plists(self, path):
         # Append patches_OC/Clover.plist to the path, and return a list
-        # with the format ((oc_path,exists),(clover_path,exists))
+        # with the format:
+        # ((oc_path,exists,plist_name),(clover_path,exists,plist_name))
         path_checks = []
         for p_type,name in self.target_patches:
-            p = os.path.join(path,name) if path else None
+            if path:
+                p = os.path.join(path,name)
+                isfile = os.path.isfile(p)
+            else:
+                p = None
+                isfile = False
             path_checks.append((
                 p,
-                os.path.isfile(p) if p else False,
+                isfile,
                 name
             ))
         return path_checks
@@ -246,11 +252,10 @@ class PatchMerge:
             return self.pause_interactive()
         # Ensure our patches plists exist, and break out info
         # into the target_path and target_name as needed
-        o,c = self._get_patches_plists(self.output)
-        target_path,_,target_name = {
-            "OpenCore":o,
-            "Clover":c
-        }.get(self.config_type,(None,False,None))
+        target_path,_,target_name = self.get_patch_plist_for_type(
+            self.output,
+            self.config_type
+        )
         # This should only show up if output is None/False/empty
         if not target_path:
             print("Could not locate {} in:".format(target_name or "the required patches plist"))
@@ -458,6 +463,13 @@ class PatchMerge:
             type_string = "OpenCore" if "PlatformInfo" in config_data else "Clover" if "SMBIOS" in config_data else None
         return (type_string,config_data,None)
 
+    def get_patch_plist_for_type(self, path, config_type):
+        o,c = self._get_patches_plists(path)
+        return {
+            "OpenCore":o,
+            "Clover":c
+        }.get(config_type,(None,False,None))
+
     def select_plist(self):
         while True:
             self.u.head("Select Plist")
@@ -497,11 +509,10 @@ class PatchMerge:
 
     def main(self):
         # Gather some preliminary info for display
-        o,c = self._get_patches_plists(self.output)
-        target_path,target_exists,target_name = {
-            "OpenCore":o,
-            "Clover":c
-        }.get(self.config_type,(None,False,"Unknown"))
+        target_path,target_exists,target_name = self.get_patch_plist_for_type(
+            self.output,
+            self.config_type
+        )
         self.u.resize(self.w,self.h)
         self.u.head()
         print("")
@@ -509,7 +520,7 @@ class PatchMerge:
         print("Type of config.plist:  {}".format(self.config_type or "Unknown"))
         print("Results Folder:        {}".format(self.output))
         print("Patches Plist:         {}{}".format(
-            target_name,
+            target_name or "Unknown",
             "" if (not target_name or target_exists) else " - {}!! MISSING !!{}".format(self.red,self.rst)
         ))
         print("Overwrite Original:    {}{}{}{}".format(
