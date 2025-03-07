@@ -1,8 +1,8 @@
 from Scripts import utils, plist
-import os
+import argparse, os
 
 class PatchMerge:
-    def __init__(self):
+    def __init__(self, config=None, results=None, overwrite=False, interactive=True):
         self.u = utils.Utils("Patch Merge")
         self.w = 80
         self.h = 24
@@ -20,25 +20,36 @@ class PatchMerge:
                 os.system("color") # Allow ANSI color escapes.
             self.w = 120
             self.h = 30
-        self.output = self.get_results_folder()
-        self.config_path = None
+        self.interactive = interactive
+        self.overwrite = overwrite
+        self.config_path = config
         self.config_type = None
+        self.output = results or self.get_default_results_folder()
+        self.target_patches = {
+            "OpenCore":"patches_OC.plist",
+            "Clover":"patches_Clover.plist"
+        }
+        # Expand paths as needed
+        if self.config_path:
+            self.config_path = os.path.realpath(self.config_path)
+            self.config_type,_,_ = self.get_plist_info(self.config_path)
+        if self.output:
+            self.output = os.path.realpath(self.output)
 
     def _get_patches_plists(self, path):
         # Append patches_OC/Clover.plist to the path, and return a list
         # with the format ((oc_path,exists),(clover_path,exists))
-        if not path or not os.path.isdir(path):
-            return ((None,False),(None,False))
         path_checks = []
-        for name in ("patches_OC.plist","patches_Clover.plist"):
-            p = os.path.join(path,name)
+        for name in self.target_patches.values():
+            p = os.path.join(path,name) if path else None
             path_checks.append((
                 p,
-                os.path.isfile(p)
+                os.path.isfile(p) if p else False,
+                name
             ))
         return path_checks
 
-    def get_results_folder(self, prompt=False):
+    def get_default_results_folder(self, prompt=False):
         # Let's attempt to locate a Results folder either in the same
         # directory as this script, or in the parent directory.
         # If none is found - we'll have to prompt the user as needed.
@@ -95,7 +106,7 @@ class PatchMerge:
                 print("")
                 print("That path either does not exist, or is not a folder.")
                 print("")
-                self.u.grab("Returning in 5 seconds...",timeout=5)
+                self.u.grab("Press [enter] to return...")
                 continue
             # Got a folder - check for patches_OC/Clover.plist
             o,c = self._get_patches_plists(test_path)
@@ -105,7 +116,7 @@ class PatchMerge:
                 print("")
                 print("Neither patches_OC.plist nor patches_Clover.plist were found at that path.")
                 print("")
-                self.u.grab("Returning in 5 seconds...",timeout=5)
+                self.u.grab("Press [enter] to return...")
                 continue
             # We got what we need - set and return the path
             self.output = test_path
@@ -160,14 +171,23 @@ class PatchMerge:
         return False
 
     def ensure_path(self, plist_data, path_list, final_type = list):
-        if not path_list: return plist_data
+        if not path_list:
+            return plist_data
+        if not isinstance(plist_data,dict):
+            plist_data = {} # Override it with a dict
+        # Set our initial reference, then iterate the
+        # path list
         last = plist_data
-        for index,path in enumerate(path_list):
+        for i,path in enumerate(path_list,start=1):
+            # Check if our next path var is in last
             if not path in last:
-                if index >= len(path_list)-1:
-                    last[path] = final_type()
-                else:
-                    last[path] = {}
+                last[path] = {} if i < len(path_list) else final_type()
+            # Make sure it's the correct type if we're at the
+            # end of the entries
+            if i >= len(path_list) and not isinstance(last[path],final_type):
+                # Override it
+                last[path] = final_type()
+            # Update our reference
             last = last[path]
         return plist_data
 
@@ -189,51 +209,73 @@ class PatchMerge:
                 return check_name
             num += 1 # Increment our counter
 
+    def pause_interactive(self, return_value=None):
+        if self.interactive:
+            print("")
+            self.u.grab("Press [enter] to return...")
+        return return_value
+
     def patch_plist(self):
         # Retain the config name
+        if self.interactive:
+            self.u.head("Patching Plist")
+            print("")
+        # Make sure we have a config_path
+        if not self.config_path:
+            print("No target plist path specified!")
+            return self.pause_interactive()
+        # Make sure that config_path exists
+        if not os.path.isfile(self.config_path):
+            print("Could not locate target plist at:")
+            print(" - {}".format(self.config_path))
+            return self.pause_interactive()
+        # Make sure our output var has a value
+        if not self.output:
+            print("No Results folder path specified!")
+            return self.pause_interactive()
         config_name = os.path.basename(self.config_path)
-        self.u.head("Patching Plist")
-        print("")
         print("Loading {}...".format(config_name))
-        try:
-            config_data = plist.load(open(self.config_path,"rb"))
-        except Exception as e:
+        self.config_type,config_data,e = self.get_plist_info(self.config_path)
+        if e:
             print(" - Failed to load! {}".format(e))
-            print("")
-            self.u.grab("Press [enter] to return...")
-            return
+            return self.pause_interactive()
         # Recheck the config.plist type
-        self.config_type = "OpenCore" if "PlatformInfo" in config_data else "Clover" if "SMBIOS" in config_data else None
-        o,c = self._get_patches_plists(self.output)
-        target_path = {"OpenCore":o[0],"Clover":c[0]}.get(self.config_type)
-        errors_found = normalize_headers = False # Default to off
-        if not target_path:
+        if not self.config_type:
             print("Could not determine plist type!")
-            print("")
-            self.u.grab("Press [enter] to return...")
-            return
+            return self.pause_interactive()
+        # Ensure our patches plists exist, and break out info
+        # into the target_path and target_name as needed
+        o,c = self._get_patches_plists(self.output)
+        target_path,_,target_name = {
+            "OpenCore":o,
+            "Clover":c
+        }.get(self.config_type,(None,False,None))
+        # This should only show up if output is None/False/empty
+        if not target_path:
+            print("Could not locate {} in:".format(target_name or "the required patches plist"))
+            print(" - {}".format(self.output))
+            return self.pause_interactive()
+        # Make sure the path actually exists - and is a file
         if not os.path.isfile(target_path):
-            print("Could not find locate required patches at:")
+            print("Could not locate required patches at:")
             print(" - {}".format(target_path))
-            print("")
-            self.u.grab("Press [enter] to return...")
-            return
-        print("Loading {}...".format(os.path.basename(target_path)))
-        try:
-            target_data = plist.load(open(target_path,"rb"))
-        except Exception as e:
+            return self.pause_interactive()
+        # Set up some preliminary variables for reporting later
+        errors_found = normalize_headers = False # Default to off
+        target_name = os.path.basename(target_path)
+        print("Loading {}...".format(target_name))
+        # Load the target plist
+        _,target_data,e = self.get_plist_info(target_path)
+        if e:
             print(" - Failed to load! {}".format(e))
-            print("")
-            self.u.grab("Press [enter] to return...")
-            return
-        print("Ensuring paths in {}...".format(config_name))
+            return self.pause_interactive()
+        print("Ensuring paths in {} and {}...".format(config_name,target_name))
+        # Make sure all the needed values are there
         if self.config_type == "OpenCore":
-            print(" - ACPI -> Add...")
-            config_data = self.ensure_path(config_data,("ACPI","Add"))
-            print(" - ACPI -> Delete...")
-            config_data = self.ensure_path(config_data,("ACPI","Delete"))
-            print(" - ACPI -> Patch...")
-            config_data = self.ensure_path(config_data,("ACPI","Patch"))
+            for p in (("ACPI","Add"),("ACPI","Delete"),("ACPI","Patch")):
+                print(" - {}...".format(" -> ".join(p)))
+                config_data = self.ensure_path(config_data,p)
+                target_data = self.ensure_path(target_data,p)
             print(" - ACPI -> Quirks...")
             config_data = self.ensure_path(config_data,("ACPI","Quirks"),final_type=dict)
             normalize_headers = config_data["ACPI"]["Quirks"].get("NormalizeHeaders",False)
@@ -244,19 +286,27 @@ class PatchMerge:
                     self.rst
                 ))
                 normalize_headers = False
+            # Set up our patch sources
+            ssdts = target_data["ACPI"]["Add"]
+            patch = target_data["ACPI"]["Patch"]
+            drops = target_data["ACPI"]["Delete"]
+            # Set up our original values
+            s_orig = config_data["ACPI"]["Add"]
+            p_orig = config_data["ACPI"]["Patch"]
+            d_orig = config_data["ACPI"]["Delete"]
         else:
-            print(" - ACPI -> DropTables")
-            config_data = self.ensure_path(config_data,("ACPI","DropTables"))
-            print(" - ACPI -> SortedOrder...")
-            config_data = self.ensure_path(config_data,("ACPI","SortedOrder"))
-            print(" - ACPI -> DSDT -> Patches...")
-            config_data = self.ensure_path(config_data,("ACPI","DSDT","Patches"))
-        ssdts = target_data.get("ACPI",{}).get("Add",[]) if self.config_type == "OpenCore" else target_data.get("ACPI",{}).get("SortedOrder",[])
-        patch = target_data.get("ACPI",{}).get("Patch",[]) if self.config_type == "OpenCore" else target_data.get("ACPI",{}).get("DSDT",{}).get("Patches",[])
-        drops = target_data.get("ACPI",{}).get("Delete",[]) if self.config_type == "OpenCore" else target_data.get("ACPI",{}).get("DropTables",[])
-        s_orig = config_data["ACPI"]["Add"] if self.config_type == "OpenCore" else config_data["ACPI"]["SortedOrder"]
-        p_orig = config_data["ACPI"]["Patch"] if self.config_type == "OpenCore" else config_data["ACPI"]["DSDT"]["Patches"]
-        d_orig = config_data["ACPI"]["Delete"] if self.config_type == "OpenCore" else config_data["ACPI"]["DropTables"]
+            for p in (("ACPI","DropTables"),("ACPI","SortedOrder"),("ACPI","DSDT","Patches")):
+                print(" - {}...".format(" -> ".join(p)))
+                config_data = self.ensure_path(config_data,p)
+                target_data = self.ensure_path(target_data,p)
+            # Set up our patch sources
+            ssdts = target_data["ACPI"]["SortedOrder"]
+            patch = target_data["ACPI"]["DSDT"]["Patches"]
+            drops = target_data["ACPI"]["DropTables"]
+            # Set up our original values
+            s_orig = config_data["ACPI"]["SortedOrder"]
+            p_orig = config_data["ACPI"]["DSDT"]["Patches"]
+            d_orig = config_data["ACPI"]["DropTables"]
         print("")
         if not ssdts:
             print("--- No SSDTs to add - skipping...")
@@ -365,16 +415,17 @@ class PatchMerge:
                     config_name
                 ))
         print("")
-        config_name = self.get_unique_name(config_name,self.output)
-        output_path = os.path.join(self.output,config_name)
+        if self.overwrite:
+            output_path = self.config_path
+        else:
+            config_name = self.get_unique_name(config_name,self.output)
+            output_path = os.path.join(self.output,config_name)
         print("Saving to {}...".format(output_path))
         try:
             plist.dump(config_data,open(output_path,"wb"))
         except Exception as e:
             print(" - Failed to save! {}".format(e))
-            print("")
-            self.u.grab("Press [enter] to return...")
-            return
+            return self.pause_interactive()
         print(" - Saved.")
         print("")
         if errors_found:
@@ -390,8 +441,21 @@ class PatchMerge:
         ))
         print("")
         print("Done.")
-        print("")
-        self.u.grab("Press [enter] to return...")
+        return self.pause_interactive()
+
+    def get_plist_info(self, config_path):
+        # Attempts to load the passed config and return a tuple
+        # of (type_string,config_data,error)
+        type_string = config_data = e = None
+        try:
+            config_data = plist.load(open(config_path,"rb"))
+        except Exception as e:
+            return (None,None,e)
+        if not isinstance(config_data,dict):
+            e = "Invalid root node type: {}".format(type(config_data))
+        else:
+            type_string = "OpenCore" if "PlatformInfo" in config_data else "Clover" if "SMBIOS" in config_data else None
+        return (type_string,config_data,None)
 
     def select_plist(self):
         while True:
@@ -414,26 +478,29 @@ class PatchMerge:
                 print("")
                 print("That path either does not exist, or is not a file.")
                 print("")
-                self.u.grab("Returning in 5 seconds...",timeout=5)
+                self.u.grab("Press [enter] to return...")
                 continue
             # Got a file - try to load it
-            try:
-                config_data = plist.load(open(test_path,"rb"))
-            except Exception as e:
+            t,_,e = self.get_plist_info(test_path)
+            if e:
                 self.u.head("Invalid File")
                 print("")
                 print("That file failed to load:\n\n{}".format(e))
                 print("")
-                self.u.grab("Returning in 5 seconds...",timeout=5)
+                self.u.grab("Press [enter] to return...")
                 continue
             # Got a valid file
             self.config_path = test_path
-            self.config_type = "OpenCore" if "PlatformInfo" in config_data else "Clover" if "SMBIOS" in config_data else None
+            self.config_type = t
             return
 
     def main(self):
+        # Gather some preliminary info for display
         o,c = self._get_patches_plists(self.output)
-        target_path = {"OpenCore":o[0],"Clover":c[0]}.get(self.config_type)
+        target_path,target_exists,target_name = {
+            "OpenCore":o,
+            "Clover":c
+        }.get(self.config_type,(None,False,"Unknown"))
         self.u.resize(self.w,self.h)
         self.u.head()
         print("")
@@ -441,14 +508,21 @@ class PatchMerge:
         print("Type of config.plist:  {}".format(self.config_type or "Unknown"))
         print("Results Folder:        {}".format(self.output))
         print("Patches Plist:         {}{}".format(
-            os.path.basename(target_path) if target_path else target_path,
-            "" if not target_path or os.path.exists(target_path) else " - MISSING!"
+            target_name,
+            "" if (not target_name or target_exists) else " - {}!! MISSING !!{}".format(self.red,self.rst)
+        ))
+        print("Overwrite Original:    {}{}{}{}".format(
+            self.red if self.overwrite else self.grn,
+            "!! True !!" if self.overwrite else "False",
+            self.rst,
+            " - Make Sure You Have A Backup!" if self.overwrite else ""
         ))
         print("")
-        print("1. Select config.plist")
-        print("2. Select Results Folder")
-        if self.config_path and target_path and os.path.exists(target_path):
-            print("3. Patch with {}".format(os.path.basename(target_path)))
+        print("C. Select config.plist")
+        print("O. Toggle Overwrite Original")
+        print("R. Select Results Folder")
+        if self.config_path and target_exists:
+            print("P. Patch with {}".format(target_name))
         print("")
         print("Q. Quit")
         print("")
@@ -457,20 +531,43 @@ class PatchMerge:
             return
         if menu.lower() == "q":
             self.u.custom_quit()
-        elif menu == "1":
+        elif menu == "c":
             self.select_plist()
-        elif menu == "2":
+        elif menu == "o":
+            self.overwrite ^= True
+        elif menu == "r":
             self.select_results_folder()
-        elif menu == "3" and self.config_path and target_path:
+        elif menu == "p" and self.config_path and target_exists:
             self.patch_plist()
 
 if __name__ == '__main__':
-    if 2/3 == 0: input = raw_input
-    p = PatchMerge()
-    while True:
-        try:
-            p.main()
-        except Exception as e:
-            print("An error occurred: {}".format(e))
-            print("")
-            input("Press [enter] to continue...")
+    # Setup the cli args
+    parser = argparse.ArgumentParser(prog="PatchMerge.py", description="PatchMerge - py script to merge patches_[OC/Clover].plist with a config.plist.")
+    parser.add_argument("-c", "--config", help="path to target config.plist - required if running in non-interactive mode")
+    parser.add_argument("-r", "--results", help="path to Results folder containing patches_[OC/Clover].plist - required if running in non-interactive mode")
+    parser.add_argument("-o", "--overwrite", help="overwrite the original config.plist", action="store_true")
+    parser.add_argument("-i", "--no-interaction", help="run in non-interactive mode - requires -c and -r", action="store_true")
+
+    args = parser.parse_args()
+
+    p = PatchMerge(
+        config=args.config,
+        results=args.results,
+        overwrite=args.overwrite,
+        interactive=not args.no_interaction
+    )
+
+    if args.no_interaction:
+        # We're in non-interactive mode here
+        p.patch_plist()
+    else:
+        # Interactive mode
+        while True:
+            if 2/3 == 0:
+                input = raw_input
+            try:
+                p.main()
+            except Exception as e:
+                print("An error occurred: {}".format(e))
+                print("")
+                input("Press [enter] to continue...")
