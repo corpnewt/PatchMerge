@@ -440,12 +440,13 @@ class PatchMerge:
                 self.rst
             ))
             print("")
-        print("{}!! WARNING !!{} Make sure you review the saved {} before replacing!".format(
-            self.red,
-            self.rst,
-            config_name
-        ))
-        print("")
+        if not self.overwrite:
+            print("{}!! WARNING !!{} Make sure you review the saved {} before replacing!".format(
+                self.red,
+                self.rst,
+                config_name
+            ))
+            print("")
         print("Done.")
         return self.pause_interactive()
 
