@@ -575,9 +575,9 @@ if __name__ == '__main__':
         p.patch_plist()
     else:
         # Interactive mode
+        if 2/3 == 0:
+            input = raw_input
         while True:
-            if 2/3 == 0:
-                input = raw_input
             try:
                 p.main()
             except Exception as e:
